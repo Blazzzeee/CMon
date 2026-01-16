@@ -16,6 +16,7 @@
                 libevent
                 pkg-config
                 gcc
+                gdb
 
         ];
     };
