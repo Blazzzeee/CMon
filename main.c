@@ -28,17 +28,6 @@ char *ROUTES[] = {
 uint8_t lengthRoutes = sizeof(ROUTES) / sizeof(char *);
 
 
-static void generic_request_handler(struct evhttp_request *req, void *ctx)
-{ 
-    // This is a generic callback invoked by the server on a http request , that does not match evhttp_set_cb routes
-    // TODO: this method should refuse every routes , and method
-    struct evbuffer *reply = evbuffer_new();
-
-    evbuffer_add_printf(reply, "It works!");
-    evhttp_send_reply(req, HTTP_OK, NULL, reply);
-    evbuffer_free(reply);
-}
-
 static void signal_cb(evutil_socket_t fd, short event, void *arg)
 {
     printf("%s Shutting down server...\n", strsignal(fd));
@@ -48,6 +37,11 @@ static void signal_cb(evutil_socket_t fd, short event, void *arg)
 
 static void request_handler(struct evhttp_request *req , void *ctx)
 {
+
+    // This callback is invoked with the parameter i
+    // (i) maps which route was called
+    // TODO: handle route based dispatch
+    // TODO: implement generic dispatch table
     int i = (int ) (intptr_t) ctx;
     printf("Got request for route: %s", ROUTES[i]);
 
@@ -55,6 +49,15 @@ static void request_handler(struct evhttp_request *req , void *ctx)
     evbuffer_add_printf(reply, "ACK: %s", ROUTES[i]);
     evhttp_send_reply(req, HTTP_OK, NULL, reply);
     
+}
+
+
+static void generic_request_handler(struct evhttp_request *req, void *ctx)
+{ 
+    // This is a generic callback invoked by the server on a http request , that does not match evhttp_set_cb routes
+    // this method refuses every routes and methods that are not listed in ROUTES
+
+    evhttp_send_error(req, HTTP_BADREQUEST, NULL);
 }
 
 int main()
@@ -71,28 +74,28 @@ int main()
 
     http_server = evhttp_new(base);
     // Bind the server to system socket
-    evhttp_bind_socket(http_server, http_addr, http_port);
-
-    
-
+    evhttp_bind_socket(http_server, http_addr, http_port);   
 
     // Sets the what HTTP methods are supported in requests accepted by this
     // server, and passed to user callbacks.
+    // unsupported requests return 501
     uint16_t ALLOWED_METHODS = EVHTTP_REQ_GET | EVHTTP_REQ_POST | EVHTTP_REQ_PATCH | EVHTTP_REQ_DELETE;
     evhttp_set_allowed_methods(http_server , ALLOWED_METHODS);
 
     
-    // TODO: Register routes
 
-
+    // Register all the routes with their callbacks to the server
     for (int i=0 ; i < lengthRoutes ; ++i){
         if ((ret=evhttp_set_cb(http_server, ROUTES[i],
                                 request_handler, (void *)(intptr_t) i))!=0){
             perror("evhttp_set_cb");
         }
     }
-    // This catches the request that will not be hanlded by any registered callbacks , registered with evhttp_set_cb
+
     // Register generic http callback
+    // This catches the request that will not be hanlded by any registered callbacks ,
+    // registered with evhttp_set_cb
+    // request returns 401 Bad request
     evhttp_set_gencb(http_server, generic_request_handler, NULL);
 
 
