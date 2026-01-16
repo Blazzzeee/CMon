@@ -13,7 +13,7 @@
         in {
             devShells.${system}.default = pkgs.mkShell {
             buildInputs = with pkgs; [
-                libmicrohttpd
+                libevent
                 pkg-config
                 gcc
 
