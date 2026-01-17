@@ -15,40 +15,64 @@
 
 #define PORT 8000
 
-char *ROUTES[] = {
-    "/health",
-    "/reboot",
-    "/restart",
-    "/sync-upstream",
-    "/deploy-branch", //default=main
-    "/teardown-branch", //default=main
-    "/logs" , //branch=? , gives snapshot of logs on branch deployed
+#define DEBUG true
+
+//Callbacks
+static void generic_callback(struct evhttp_request *req ,void *ctx);
+static void todo_callback(struct evhttp_request *req , void *ctx);
+
+// Internal types
+struct {
+  char *path;
+  char *method;
+  void *generic_callback;
+  // TODO: ADD COMMAND TABLE
+  #ifdef DEBUG
+      #warning "TODO: Command table"
+  #endif
+} typedef route;
+
+// Globals
+
+//ROUTE/METHOD/CALLBACK CONFIG
+route ROUTES_CONFIG[] = {
+  {"/health", "GET" , todo_callback,  },
+  {"/reboot" , "POST" , todo_callback, },
+  {"/restart" , "POST" , todo_callback, },
+  {"/sync_upstream" , "PUT" , todo_callback, },
+  {"/deploy_branch" , "POST" , todo_callback, },
+  {"/teardown_branch" , "DELETE" , todo_callback, },
+  {"/logs", "GET" , todo_callback, },
 };
 
-uint8_t lengthRoutes = sizeof(ROUTES) / sizeof(char *);
+uint8_t lengthRoutes = sizeof(ROUTES_CONFIG) / sizeof(route);
 
 
-static void signal_cb(evutil_socket_t fd, short event, void *arg)
-{
-    printf("%s Shutting down server...\n", strsignal(fd));
-    event_base_loopbreak(arg);
-}
-
-
-static void request_handler(struct evhttp_request *req , void *ctx)
-{
+void todo_callback(struct evhttp_request *req , void *ctx){
+    #ifdef DEBUG
+    #warning "Implement callback"
+    #endif
 
     // This callback is invoked with the parameter i
     // (i) maps which route was called
     // TODO: handle route based dispatch
     // TODO: implement generic dispatch table
     int i = (int ) (intptr_t) ctx;
-    printf("Got request for route: %s", ROUTES[i]);
+    char **path = &ROUTES_CONFIG[i].path;
+    fprintf(stderr , "Got request for route: %s \n", *path);
 
     struct evbuffer *reply = evbuffer_new();
-    evbuffer_add_printf(reply, "ACK: %s", ROUTES[i]);
+    evbuffer_add_printf(reply, "ACK: %s \n", *path);
     evhttp_send_reply(req, HTTP_OK, NULL, reply);
-    
+}
+
+
+static void signal_cb(evutil_socket_t fd, short event, void *arg)
+{
+
+    (void) event;
+    printf("%s Shutting down server...\n", strsignal(fd));
+    event_base_loopbreak(arg);
 }
 
 
@@ -56,6 +80,9 @@ static void generic_request_handler(struct evhttp_request *req, void *ctx)
 { 
     // This is a generic callback invoked by the server on a http request , that does not match evhttp_set_cb routes
     // this method refuses every routes and methods that are not listed in ROUTES
+    (void) ctx;
+
+    fprintf(stderr, "Got request for unallowed path \n");
 
     evhttp_send_error(req, HTTP_BADREQUEST, NULL);
 }
@@ -83,12 +110,11 @@ int main()
     evhttp_set_allowed_methods(http_server , ALLOWED_METHODS);
 
     
-
     // Register all the routes with their callbacks to the server
     for (int i=0 ; i < lengthRoutes ; ++i){
-        if ((ret=evhttp_set_cb(http_server, ROUTES[i],
-                                request_handler, (void *)(intptr_t) i))!=0){
-            perror("evhttp_set_cb");
+        if ((ret=evhttp_set_cb(http_server, ROUTES_CONFIG[i].path,
+                                todo_callback, (void *)(intptr_t) i)) != 0){             
+            perror("evhttp_set_cb: ");
         }
     }
 
