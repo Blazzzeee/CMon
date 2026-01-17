@@ -15,19 +15,23 @@
 
 #define DEBUG true
 
+#define DO_PRAGMA(x) _Pragma(#x)
+
+#ifdef DEBUG
+#define TODO(msg) DO_PRAGMA(message("TODO: " msg))
+#else
+#define TODO(msg)
+#endif
+
 // Callbacks
-static void generic_callback(struct evhttp_request *req, void *ctx);
 static void todo_callback(struct evhttp_request *req, void *ctx);
 
 // Internal types
 struct {
     char *path;
-    char *method;
-    void *generic_callback;
-// TODO: ADD COMMAND TABLE
-#ifdef DEBUG
-#warning "TODO: Command table"
-#endif
+    enum evhttp_cmd_type method;
+    void (*callback)(struct evhttp_request *req, void *);
+    TODO("Add Command table")
 } typedef route;
 
 // Globals
@@ -36,37 +40,37 @@ struct {
 route ROUTES_CONFIG[] = {
     {
         "/health",
-        "GET",
+        EVHTTP_REQ_GET,
         todo_callback,
     },
     {
         "/reboot",
-        "POST",
+        EVHTTP_REQ_POST,
         todo_callback,
     },
     {
         "/restart",
-        "POST",
+        EVHTTP_REQ_POST,
         todo_callback,
     },
     {
         "/sync_upstream",
-        "PUT",
+        EVHTTP_REQ_PUT,
         todo_callback,
     },
     {
         "/deploy_branch",
-        "POST",
+        EVHTTP_REQ_GET,
         todo_callback,
     },
     {
         "/teardown_branch",
-        "DELETE",
+        EVHTTP_REQ_DELETE,
         todo_callback,
     },
     {
         "/logs",
-        "GET",
+        EVHTTP_REQ_GET,
         todo_callback,
     },
 };
@@ -74,9 +78,7 @@ route ROUTES_CONFIG[] = {
 uint8_t lengthRoutes = sizeof(ROUTES_CONFIG) / sizeof(route);
 
 int authenticate(struct evhttp_request *req) {
-#ifdef DEBUG
-#warning "TODO: implement authentication"
-#endif
+    TODO("Implement authentication")
 
 error:
     evhttp_send_error(req, HTTP_BADREQUEST, NULL);
@@ -102,9 +104,7 @@ error:
 }
 
 void todo_callback(struct evhttp_request *req, void *ctx) {
-#ifdef DEBUG
-#warning "Implement callback"
-#endif
+    TODO("Implement callback")
 
     // This callback is invoked with the parameter i
     // (i) maps which route was called
@@ -117,6 +117,7 @@ void todo_callback(struct evhttp_request *req, void *ctx) {
     struct evbuffer *reply = evbuffer_new();
     evbuffer_add_printf(reply, "ACK: %s \n", *path);
     evhttp_send_reply(req, HTTP_OK, NULL, reply);
+    evbuffer_free(reply);
 }
 
 static void signal_cb(evutil_socket_t fd, short event, void *arg) {
