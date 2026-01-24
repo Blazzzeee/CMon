@@ -17,6 +17,7 @@
                 pkg-config
                 gcc
                 gdb
+                openssl_3
 
         ];
     };
