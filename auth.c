@@ -1,0 +1,134 @@
+#include "openssl/crypto.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define KEY_LEN 256
+#define KEY_LEN_BYTES (256 / 8)
+#define SECRET_KEY_LOCATION "./client_secret.key"
+
+// Load server secret key
+
+unsigned char secret_key_buffer[KEY_LEN_BYTES];
+
+int decode_buf_from_hex(const char *hexbuf, unsigned char *out, size_t out_len) {
+    size_t len = strlen(hexbuf);
+
+    if (len > 0 && hexbuf[len - 1] == '\n')
+        len--;
+
+    if (len != out_len * 2)
+        return 0;
+
+    char tmp_hex[out_len * 2 + 1];
+    memcpy(tmp_hex, hexbuf, len);
+    tmp_hex[len] = '\0';
+
+    size_t decoded_len = 0;
+    unsigned char *tmp = OPENSSL_hexstr2buf(tmp_hex, &decoded_len);
+
+    if (!tmp || decoded_len != out_len) {
+        OPENSSL_free(tmp);
+        return 0;
+    }
+
+    memcpy(out, tmp, out_len);
+    OPENSSL_cleanse(tmp, decoded_len);
+    OPENSSL_free(tmp);
+
+    return 1;
+}
+
+int init_auth() {
+
+    // The server secret key is read from file and
+    // loaded into memory once at the server boot ,
+    // the secret key is in hex , and is first loaded in memory
+    // and then we try to deocde hex ,
+    // and then finally the hex is dumped inside global buffer
+
+    FILE *fd = fopen(SECRET_KEY_LOCATION, "rb");
+
+    if (!fd) {
+        // TODO: handle file permissions gracefully
+        perror("Critical: The client auth key could not be loaded\n");
+        return 1;
+    }
+
+    // Gets the size of file contents
+    fseek(fd, 0, SEEK_END);
+    long size = ftell(fd);
+    rewind(fd);
+
+    size_t expected_hex_len = KEY_LEN_BYTES * 2;
+
+    // If key isnt 256 bit , we exit
+    if (size != (long)expected_hex_len && size != (long)expected_hex_len + 1) {
+        fprintf(stderr, "Invlaid hex key size: %ld (expected %d)\n", size, KEY_LEN_BYTES);
+        fclose(fd);
+        return 1;
+    }
+
+    // populate hex from file contents buffer
+    char hexbuf[KEY_LEN_BYTES * 2 + 2] = {0};
+
+    if (fread(hexbuf, 1, size, fd) != (size_t)size) {
+        fclose(fd);
+        return 1;
+    }
+    // We are done with file atp
+    fclose(fd);
+
+    if (!decode_buf_from_hex(hexbuf, secret_key_buffer, KEY_LEN_BYTES)) {
+        fprintf(stderr, "Key decode failed\n");
+        return 1;
+    }
+
+    fprintf(stderr, "The client auth key was succesfully loaded\n");
+    return 0;
+}
+
+int authenticate(const char *expected_key, const char *request_key_hex) {
+
+    if (!expected_key) {
+        fprintf(stderr, "The client auth key on server is null\n");
+        return 1;
+    }
+
+    if (!request_key_hex) {
+        fprintf(stderr, "The request auth key is null\n");
+        return 1;
+    }
+
+    unsigned char req_key[KEY_LEN_BYTES];
+
+    if (!decode_buf_from_hex(request_key_hex, req_key, KEY_LEN_BYTES)) {
+        return 1;
+    }
+
+    // TODO: sanitize request key for sequences
+
+    return CRYPTO_memcmp(expected_key, req_key, KEY_LEN_BYTES);
+}
+
+int main(int argc, char *argv[]) {
+
+    int result;
+    result = init_auth();
+
+    if (result != 0) {
+        fprintf(stderr, "There was an error loading the auth key\n");
+        return 1;
+    }
+
+    result = authenticate(secret_key_buffer, "hhlkh");
+
+    if (result != 0) {
+        fprintf(stderr, "Auth failed: Refusing client handshake\n");
+        return 1;
+    } else {
+        fprintf(stderr, "client authenticated\n");
+    }
+
+    return 0;
+}
