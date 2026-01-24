@@ -2,10 +2,10 @@
 
 echo "Starting build phase"
 set -euo pipefail
-target=main.c
+target=auth.c
 DEBUG=${DEBUG:-0}
 
-cc -Wall -Wextra -g -o ./target "$target" $(pkg-config --cflags --libs libevent)
+cc -Wall -Wextra -g -o ./target "$target" $(pkg-config --cflags --libs libevent openssl)
 
 echo "Compilation Successfull"
 
