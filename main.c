@@ -1,6 +1,5 @@
 #include "libevent-2.1.12-stable/include/event2/http.h"
 #include <arpa/inet.h>
-#include <cstddef>
 #include <errno.h>
 #include <event2/buffer.h>
 #include <event2/event.h>
@@ -150,8 +149,8 @@ void health_callback(struct evhttp_request *req, void *ctx) {
     if (request_method != allowed_route_method) {
         fprintf(stderr, "%s is not an allowed method on route %s \n",
                 http_method_str(request_method), *route);
-        goto error;
         err = 1;
+        goto error;
     }
 
     // Enforce authentication
