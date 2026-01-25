@@ -1,42 +1,65 @@
+#include "auth.h"
 #include "openssl/crypto.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+// TOOD: CLeanup for header file
 #define KEY_LEN 256
 #define KEY_LEN_BYTES (256 / 8)
 #define SECRET_KEY_LOCATION "./client_secret.key"
+#define DEBUG
 
 // Load server secret key
 
 unsigned char secret_key_buffer[KEY_LEN_BYTES];
 
+// Hexbuf is buffer to decode , output will be places in out buffer ,
+// out_len is expected byte length of the hexbuffer to be decoded
+// This function is helper which decodes the given hex buffer from hex
+// the out_len is the expected byte length of hex to be decoded
 int decode_buf_from_hex(const char *hexbuf, unsigned char *out, size_t out_len) {
+    if (!hexbuf || !out) {
+        fprintf(stderr, "Error: Could not decode hex buffer: Buffer is null\n");
+        return 1;
+    }
+
     size_t len = strlen(hexbuf);
 
+    // Sanitize input of hexbuffer
+    // without mdoifying buffer in place
     if (len > 0 && hexbuf[len - 1] == '\n')
         len--;
 
+    // Hex covers 4 bits and one char covers one byte ,
+    // so we get a conversion factor of 2
     if (len != out_len * 2)
-        return 0;
+        return 1;
 
+    // out_len is in bytes , same logic conversion factor of 2
+    // and one byte for null terminator
     char tmp_hex[out_len * 2 + 1];
     memcpy(tmp_hex, hexbuf, len);
     tmp_hex[len] = '\0';
 
+    // OPENSSL moifies the decoded output length in place
     size_t decoded_len = 0;
     unsigned char *tmp = OPENSSL_hexstr2buf(tmp_hex, &decoded_len);
 
+    // Post decode sanity check
     if (!tmp || decoded_len != out_len) {
         OPENSSL_free(tmp);
-        return 0;
+        return 1;
     }
 
+    // The output will be in out_buffer given to the function
     memcpy(out, tmp, out_len);
+
+    // Teardown
     OPENSSL_cleanse(tmp, decoded_len);
     OPENSSL_free(tmp);
 
-    return 1;
+    return 0;
 }
 
 int init_auth() {
@@ -79,7 +102,7 @@ int init_auth() {
     // We are done with file atp
     fclose(fd);
 
-    if (!decode_buf_from_hex(hexbuf, secret_key_buffer, KEY_LEN_BYTES)) {
+    if (decode_buf_from_hex(hexbuf, secret_key_buffer, KEY_LEN_BYTES)) {
         fprintf(stderr, "Key decode failed\n");
         return 1;
     }
@@ -88,12 +111,10 @@ int init_auth() {
     return 0;
 }
 
-int authenticate(const char *expected_key, const char *request_key_hex) {
+// Actual auth checker , checks in constant time
+int authenticate(const char *request_key_hex) {
 
-    if (!expected_key) {
-        fprintf(stderr, "The client auth key on server is null\n");
-        return 1;
-    }
+    unsigned const char *expected_key = secret_key_buffer;
 
     if (!request_key_hex) {
         fprintf(stderr, "The request auth key is null\n");
@@ -102,33 +123,30 @@ int authenticate(const char *expected_key, const char *request_key_hex) {
 
     unsigned char req_key[KEY_LEN_BYTES];
 
-    if (!decode_buf_from_hex(request_key_hex, req_key, KEY_LEN_BYTES)) {
+    if (decode_buf_from_hex(request_key_hex, req_key, KEY_LEN_BYTES)) {
+        fprintf(stderr, "Error decoding buf from hex");
         return 1;
     }
 
-    // TODO: sanitize request key for sequences
-
-    return CRYPTO_memcmp(expected_key, req_key, KEY_LEN_BYTES);
+    return !CRYPTO_memcmp(expected_key, req_key, KEY_LEN_BYTES);
 }
 
 int main(int argc, char *argv[]) {
 
-    int result;
-    result = init_auth();
+#ifdef DEBUG
 
-    if (result != 0) {
+    if (init_auth()) {
         fprintf(stderr, "There was an error loading the auth key\n");
         return 1;
     }
 
-    result = authenticate(secret_key_buffer, "hhlkh");
-
-    if (result != 0) {
+    if (authenticate("hjkl")) {
         fprintf(stderr, "Auth failed: Refusing client handshake\n");
         return 1;
     } else {
-        fprintf(stderr, "client authenticated\n");
+        fprintf(stderr, "Client authenticated\n");
     }
 
+#endif
     return 0;
 }
