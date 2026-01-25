@@ -118,35 +118,32 @@ int authenticate(const char *request_key_hex) {
 
     if (!request_key_hex) {
         fprintf(stderr, "The request auth key is null\n");
-        return 1;
+        return 0;
     }
 
     unsigned char req_key[KEY_LEN_BYTES];
 
     if (decode_buf_from_hex(request_key_hex, req_key, KEY_LEN_BYTES)) {
-        fprintf(stderr, "Error decoding buf from hex");
-        return 1;
+        fprintf(stderr, "Middleware: Authentication Error\n");
+        return 0;
     }
 
-    return !CRYPTO_memcmp(expected_key, req_key, KEY_LEN_BYTES);
+    return CRYPTO_memcmp(expected_key, req_key, KEY_LEN_BYTES);
 }
 
-int main(int argc, char *argv[]) {
+// int main(int argc, char *argv[]) {
 
-#ifdef DEBUG
+//     if (init_auth()) {
+//         fprintf(stderr, "There was an error loading the auth key\n");
+//         return 1;
+//     }
 
-    if (init_auth()) {
-        fprintf(stderr, "There was an error loading the auth key\n");
-        return 1;
-    }
+//     if (authenticate("hjkl")) {
+//         fprintf(stderr, "Auth failed: Refusing client handshake\n");
+//         return 1;
+//     } else {
+//         fprintf(stderr, "Client authenticated\n");
+//     }
 
-    if (authenticate("hjkl")) {
-        fprintf(stderr, "Auth failed: Refusing client handshake\n");
-        return 1;
-    } else {
-        fprintf(stderr, "Client authenticated\n");
-    }
-
-#endif
-    return 0;
-}
+//     return 0;
+// }
