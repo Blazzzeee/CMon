@@ -2,17 +2,18 @@
 
 echo "Starting build phase"
 set -euo pipefail
-target=auth.c
+SRC="main.c auth.c"
 DEBUG=${DEBUG:-0}
+BIN=target
 
-cc -Wall -Wextra -g -o ./target "$target" $(pkg-config --cflags --libs libevent openssl)
+cc -O0 -Wall -Wextra -g -o "$BIN" $SRC $(pkg-config --cflags --libs libevent openssl)
 
 echo "Compilation Successfull"
 
 if [ "$DEBUG" -eq 0 ]; then
     echo "Starting server without debugger"
-    ./target
+    ./"$BIN"
 else
     echo "Starting server inside gdb"
-    gdb --args ./target
+    gdb --args ./"$BIN"
 fi
