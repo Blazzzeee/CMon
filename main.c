@@ -1,3 +1,5 @@
+#include "auth.h"
+#include "event2/keyvalq_struct.h"
 #include "libevent-2.1.12-stable/include/event2/http.h"
 #include <arpa/inet.h>
 #include <errno.h>
@@ -24,6 +26,8 @@
 #else
 #define TODO(msg)
 #endif
+
+#define AUTH_HEADER_KEY "access_token"
 
 // Callbacks
 static void todo_callback(struct evhttp_request *req, void *ctx);
@@ -125,51 +129,76 @@ static inline const char *http_method_str(enum evhttp_cmd_type cmd_type) {
     }
 }
 
-int authenticate(struct evhttp_request *req) {
-    TODO("Implement authentication")
+void static inline raise_auth_error(struct evhttp_request *req) {
 
-error:
-    evhttp_send_error(req, HTTP_BADREQUEST, NULL);
+    evhttp_send_error(req, 401, "Authentication Error\n");
+}
 
-    return 0;
+void static inline raise_internal_error(struct evhttp_request *req) {
+
+    evhttp_send_error(req, HTTP_INTERNAL, NULL);
+}
+
+void static inline raise_method_error(struct evhttp_request *req) {
+
+    evhttp_send_error(req, HTTP_BADMETHOD, NULL);
+}
+
+void auth_middleware(struct evhttp_request *req, void *ctx) {
+
+    // Find associated route
+    unsigned int i = (int)(intptr_t)ctx;
+
+    int err = -1;
+
+    // Enforce auth here
+
+    // Extract value from request header
+    struct evkeyvalq *headers = evhttp_request_get_input_headers(req);
+    const char *client_auth_key = evhttp_find_header(headers, AUTH_HEADER_KEY);
+
+    if (!client_auth_key) {
+        fprintf(stderr, "Middleware: Authentication Error\n");
+        raise_auth_error(req);
+        return;
+    }
+
+    // Pass key to auth helper
+    if (authenticate(client_auth_key)) {
+        ROUTES_CONFIG[i].callback(req, ctx);
+        return;
+    } else {
+        raise_auth_error(req);
+        return;
+    }
+
+    // If the request comes till here ,
+    // then we will assume its an internal server error
 }
 
 void health_callback(struct evhttp_request *req, void *ctx) {
 
     int i = (int)(intptr_t)ctx;
     TODO("Make this dry");
-    char **route = &ROUTES_CONFIG[i].path;
+    const char *route = ROUTES_CONFIG[i].path;
     enum evhttp_cmd_type request_method = evhttp_request_get_command(req);
     enum evhttp_cmd_type allowed_route_method = ROUTES_CONFIG[i].method;
-    int err = -1;
     int ret;
-    fprintf(stderr, "Got request for route: %s \n", *route);
+    fprintf(stderr, "Got request for route: %s \n", route);
 
     // If request method is not allowed from event_config , send error to request
     if (request_method != allowed_route_method) {
-        fprintf(stderr, "%s is not an allowed method on route %s \n",
-                http_method_str(request_method), *route);
-        err = 1;
-        goto error;
-    }
-
-    // Enforce authentication
-    if ((ret = authenticate((void *)req)) != 0) {
-        fprintf(stderr, "Authentication error");
-        err = 2;
-        goto error;
+        fprintf(stderr, "Refusing method %s on route %s \n", http_method_str(request_method),
+                route);
+        raise_method_error(req);
     }
 
     TODO("Create and send health response")
-
-error:
-    if (1 == err) {
-        evhttp_send_error(req, HTTP_BADMETHOD, NULL);
-    } else if (2 == err) {
-        evhttp_send_error(req, 401, "Authentication error\n");
-    } else {
-        evhttp_send_error(req, HTTP_INTERNAL, NULL);
-    }
+    // If we got here then this is a correct request
+    struct evbuffer *reply = evbuffer_new();
+    evbuffer_add_printf(reply, "ACK: %s \n", route);
+    evhttp_send_reply(req, HTTP_OK, NULL, reply);
+    evbuffer_free(reply);
 }
 
 void todo_callback(struct evhttp_request *req, void *ctx) {
@@ -180,11 +209,11 @@ void todo_callback(struct evhttp_request *req, void *ctx) {
     // TODO: handle route based dispatch
     // TODO: implement generic dispatch table
     int i = (int)(intptr_t)ctx;
-    char **path = &ROUTES_CONFIG[i].path;
-    fprintf(stderr, "Got request for route: %s \n", *path);
+    const char *path = ROUTES_CONFIG[i].path;
+    fprintf(stderr, "Got request for route: %s \n", path);
 
     struct evbuffer *reply = evbuffer_new();
-    evbuffer_add_printf(reply, "ACK: %s \n", *path);
+    evbuffer_add_printf(reply, "ACK: %s \n", path);
     evhttp_send_reply(req, HTTP_OK, NULL, reply);
     evbuffer_free(reply);
 }
@@ -242,8 +271,10 @@ int main() {
     evhttp_set_allowed_methods(http_server, ALLOWED_METHODS);
 
     // Register all the routes with their callbacks to the server
+    // To mimic the bheaviour of the middleware we will allow a singular method to be registered for
+    // callback and then that method will pass callback to associated route handler
     for (int i = 0; i < lengthRoutes; ++i) {
-        if ((ret = evhttp_set_cb(http_server, ROUTES_CONFIG[i].path, ROUTES_CONFIG[i].callback,
+        if ((ret = evhttp_set_cb(http_server, ROUTES_CONFIG[i].path, auth_middleware,
                                  (void *)(intptr_t)i)) != 0) {
             perror("evhttp_set_cb: ");
         }
