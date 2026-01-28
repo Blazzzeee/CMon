@@ -44,7 +44,7 @@ int decode_buf_from_hex(const char *hexbuf, unsigned char *out, size_t out_len) 
 
     // OPENSSL moifies the decoded output length in place
     size_t decoded_len = 0;
-    unsigned char *tmp = OPENSSL_hexstr2buf(tmp_hex, &decoded_len);
+    unsigned char *tmp = OPENSSL_hexstr2buf(tmp_hex, (long *)&decoded_len);
 
     // Post decode sanity check
     if (!tmp || decoded_len != out_len) {

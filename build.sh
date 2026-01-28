@@ -6,7 +6,7 @@ SRC="main.c auth.c"
 DEBUG=${DEBUG:-0}
 BIN=target
 
-cc -O0 -Wall -Wextra -g -o "$BIN" $SRC $(pkg-config --cflags --libs libevent openssl)
+cc -O2 -Wall -Wextra -g -o "$BIN" $SRC $(pkg-config --cflags --libs libevent openssl)
 
 echo "Compilation Successfull"
 

@@ -38,7 +38,7 @@ struct {
     const char *path;
     enum evhttp_cmd_type method;
     void (*callback)(struct evhttp_request *req, void *);
-    TODO("Add Command table")
+    TODO("Add Command table");
 } typedef route;
 
 // Globals
@@ -82,7 +82,7 @@ route ROUTES_CONFIG[] = {
     },
 };
 
-size_t lengthRoutes = sizeof(ROUTES_CONFIG) / sizeof(route);
+int lengthRoutes = sizeof(ROUTES_CONFIG) / sizeof(route);
 
 // Helpers
 
@@ -129,17 +129,17 @@ static inline const char *http_method_str(enum evhttp_cmd_type cmd_type) {
     }
 }
 
-void static inline raise_auth_error(struct evhttp_request *req) {
+static inline void raise_auth_error(struct evhttp_request *req) {
 
     evhttp_send_error(req, 401, "Authentication Error\n");
 }
 
-void static inline raise_internal_error(struct evhttp_request *req) {
+static inline void raise_internal_error(struct evhttp_request *req) {
 
     evhttp_send_error(req, HTTP_INTERNAL, NULL);
 }
 
-void static inline raise_method_error(struct evhttp_request *req) {
+static inline void raise_method_error(struct evhttp_request *req) {
 
     evhttp_send_error(req, HTTP_BADMETHOD, NULL);
 }
@@ -148,9 +148,6 @@ void auth_middleware(struct evhttp_request *req, void *ctx) {
 
     // Find associated route
     unsigned int i = (int)(intptr_t)ctx;
-
-    int err = -1;
-
     // Enforce auth here
 
     // Extract value from request header
@@ -158,6 +155,7 @@ void auth_middleware(struct evhttp_request *req, void *ctx) {
     const char *client_auth_key = evhttp_find_header(headers, AUTH_HEADER_KEY);
 
     if (!client_auth_key) {
+        // If no key provided
         fprintf(stderr, "Middleware: Authentication Error\n");
         raise_auth_error(req);
         return;
@@ -165,15 +163,14 @@ void auth_middleware(struct evhttp_request *req, void *ctx) {
 
     // Pass key to auth helper
     if (authenticate(client_auth_key)) {
+        // Auth returns 1 , if request the req_key matches server client key
         ROUTES_CONFIG[i].callback(req, ctx);
         return;
     } else {
+        // If hex decode failed , key was incorrect
         raise_auth_error(req);
         return;
     }
-
-    // If the request comes till here ,
-    // then we will assume its an internal server error
 }
 
 void health_callback(struct evhttp_request *req, void *ctx) {
@@ -183,7 +180,6 @@ void health_callback(struct evhttp_request *req, void *ctx) {
     const char *route = ROUTES_CONFIG[i].path;
     enum evhttp_cmd_type request_method = evhttp_request_get_command(req);
     enum evhttp_cmd_type allowed_route_method = ROUTES_CONFIG[i].method;
-    int ret;
     fprintf(stderr, "Got request for route: %s \n", route);
 
     // If request method is not allowed from event_config , send error to request
@@ -267,7 +263,8 @@ int main() {
     // Sets the what HTTP methods are supported in requests accepted by this
     // server, and passed to user callbacks.
     // unsupported requests return 501
-    size_t ALLOWED_METHODS = EVHTTP_REQ_GET | EVHTTP_REQ_POST | EVHTTP_REQ_PUT | EVHTTP_REQ_DELETE;
+    enum evhttp_cmd_type ALLOWED_METHODS =
+        EVHTTP_REQ_GET | EVHTTP_REQ_POST | EVHTTP_REQ_PUT | EVHTTP_REQ_DELETE;
     evhttp_set_allowed_methods(http_server, ALLOWED_METHODS);
 
     // Register all the routes with their callbacks to the server
