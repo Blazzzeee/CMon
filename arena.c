@@ -1,4 +1,5 @@
 #include "arena.h"
+#include <cstdint>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -22,20 +23,17 @@ static uint64_t LOCK = 0;
 // data structhure of our allocator
 static void *BUF;
 
-static inline void *throw_if_null(void *ptr) {
-    // TODO : Backtrace caller , and crash the caller as well
-    // If ptr is null , assume we are talking about arena buf
+typedef struct {
+    uint16_t chunks;
+} arena_hdr_t;
 
-    if (!ptr)
-        ptr = BUF;
-
-    if (!ptr) {
-        fprintf(stderr, "FATAL: The pointer is null\n");
-        return NULL;
-    }
-
-    return ptr;
-}
+#define REQUIRE_ARENA_OR_RETURN_NULL()                                                             \
+    do {                                                                                           \
+        if (BUF == NULL) {                                                                         \
+            fprintf(stderr, "FATAL: Arena not initialized\n");                                     \
+            return NULL;                                                                           \
+        }                                                                                          \
+    } while (0)
 
 // Initialises arena for future allocations
 void *prealloc_arena() {
@@ -62,9 +60,11 @@ void *prealloc_arena() {
 
 // This function finds k consecutive zeroes in our bitmap , if the req matches k then the buffer
 // will be atomically claimed and a base pointer will be returned
-void *check_and_claim_atomically(size_t req) {
+void *check_and_claim(size_t req) {
     // Convert bytes to number of chunks
-    uint64_t k = (req + BUF_SIZE - 1) / BUF_SIZE;
+    // We add metadata to keep track of allocation length
+    size_t need = req + sizeof(arena_hdr_t);
+    uint64_t k = (need + BUF_SIZE - 1) / BUF_SIZE;
 
     int start_bit = find_k_consecutive_zeroes(k);
     if (start_bit == -1)
@@ -81,8 +81,14 @@ void *check_and_claim_atomically(size_t req) {
     // Use __atomic_fetch_or for true thread safety if needed
     LOCK |= claim_mask;
 
-    // Return the pointer: Base + (offset * chunk_size)
-    return (char *)BUF + (start_bit * BUF_SIZE);
+    char *base = (char *)BUF + (start_bit * BUF_SIZE);
+    // Internal 2 byte book keeping structhure enforced in
+    // allocations , which helps in deallocation
+    arena_hdr_t *hdr = (arena_hdr_t *)base;
+    hdr->chunks = (uint16_t)k;
+
+    // Return the pointer: , with arena_hdr_t
+    return (void *)(base + sizeof(arena_hdr_t));
 }
 
 // O(1) running tine for given K ,
@@ -115,7 +121,7 @@ int find_k_consecutive_zeroes(int k) {
     }
 
     // Returns first free index
-    return __builtin_ctzll(combined);
+    return __builtin_ctz(combined);
 }
 
 // O(1) allocation
@@ -124,7 +130,7 @@ int find_k_consecutive_zeroes(int k) {
 // variable
 void *allocate(size_t req) {
     void *tmp;
-    throw_if_null(NULL);
+    REQUIRE_ARENA_OR_RETURN_NULL();
 
     if (req <= 0) {
         fprintf(stderr, "FATAl: allocate: req bytes must be positive\n");
@@ -134,7 +140,7 @@ void *allocate(size_t req) {
     // Find number of chunks that will be used for this allocation
     // Check if the chunks are available , if yes then mark them in use
     // , along with returning a base pointer to the start of the requested memory chunk
-    tmp = check_and_claim_atomically(req);
+    tmp = check_and_claim(req);
 
     return tmp;
 }
@@ -143,6 +149,67 @@ void *allocate(size_t req) {
 // Mark the chunk to be out of use , can be used for future allocations
 // NOTE: we must clear the entire length of the buf by matching it with how many bitmasks were
 // this means we must deterministically predict the bitmask bits that were marked previously
-void deallocate(void *ptr) { throw_if_null(ptr); }
+// To achieve that we enforce a constraint that before 2 bytes before the allocated chunk is
+// number of chunks (k) that were allocated, now if we ensure that every allocation has
+// this , it becomes certain that we can deterministically determine the buffer boundary , or the
+// bitmask to turn off
+void deallocate(void *ptr) {
 
-void teardown_arena();
+    if (!ptr) {
+        return;
+    }
+
+    char *user_ptr = (char *)ptr;
+
+    // Read header
+    arena_hdr_t *hdr = (arena_hdr_t *)(user_ptr - sizeof(arena_hdr_t));
+    uint64_t k = hdr->chunks;
+
+    // Sanity checks
+
+    // Protect from random pointers
+    if ((char *)hdr < (char *)BUF || (char *)hdr >= (char *)BUF + BUF_SIZE * BUF_NUM) {
+        fprintf(stderr, "arena_free: invalid pointer\n");
+        return;
+    }
+
+    // If metadata was corrupted , we cant deallocate
+    if (k == 0 || k > BUF_NUM || k > 64) {
+        fprintf(stderr, "arena_free: corrupted header (k=%lu)\n", k);
+        return;
+    }
+
+    // end of allocation fits
+    char *end = (char *)hdr + k * BUF_SIZE;
+    if (end > (char *)BUF + BUF_SIZE * BUF_NUM) {
+        fprintf(stderr, "arena_free: allocation overruns arena\n");
+        return;
+    }
+
+    // Compute chunk start
+    size_t offset = (char *)hdr - (char *)BUF;
+    uint64_t start_bit = offset / BUF_SIZE;
+
+    // Build mask
+    uint64_t mask = ((k == 64) ? ~0ULL : ((1ULL << k) - 1)) << start_bit;
+
+    // Clear bits
+    LOCK &= ~mask;
+
+    // TODO: memset maybe
+}
+
+void teardown_arena(void) {
+    if (!BUF) {
+        return; // already torn down or never initialized
+    }
+
+#ifdef ARENA_DEBUG
+    // Optional: poison memory to catch use-after-free bugs
+    memset(BUF, 0xDD, BUF_SIZE * BUF_NUM);
+#endif
+
+    free(BUF);
+    BUF = NULL;
+    LOCK = 0;
+}
