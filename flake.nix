@@ -18,6 +18,8 @@
                 gcc
                 gdb
                 openssl_3
+                perf
+                flamegraph
 
         ];
     };
