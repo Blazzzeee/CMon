@@ -1,5 +1,4 @@
 #include "arena.h"
-#include <cstdint>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -39,7 +38,7 @@ typedef struct {
 void *prealloc_arena() {
 
     void *tmp;
-    size_t total_size = BUF_SIZE * BUF_NUM;
+    size_t total_size = (size_t)BUF_SIZE * (size_t)BUF_NUM;
     // Reset lock to zero
     LOCK = 0;
 
@@ -168,7 +167,8 @@ void deallocate(void *ptr) {
     // Sanity checks
 
     // Protect from random pointers
-    if ((char *)hdr < (char *)BUF || (char *)hdr >= (char *)BUF + BUF_SIZE * BUF_NUM) {
+    if ((char *)hdr < (char *)BUF ||
+        (char *)hdr >= (char *)BUF + (size_t)BUF_SIZE * (size_t)BUF_NUM) {
         fprintf(stderr, "arena_free: invalid pointer\n");
         return;
     }
@@ -181,7 +181,7 @@ void deallocate(void *ptr) {
 
     // end of allocation fits
     char *end = (char *)hdr + k * BUF_SIZE;
-    if (end > (char *)BUF + BUF_SIZE * BUF_NUM) {
+    if (end > (char *)BUF + (size_t)BUF_SIZE * BUF_NUM) {
         fprintf(stderr, "arena_free: allocation overruns arena\n");
         return;
     }
