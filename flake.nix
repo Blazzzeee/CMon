@@ -20,6 +20,8 @@
                 openssl_3
                 perf
                 flamegraph
+                python3
+                curl
 
         ];
     };
