@@ -1,304 +1,215 @@
-#include "auth.h"
-#include "event2/keyvalq_struct.h"
-#include "libevent-2.1.12-stable/include/event2/http.h"
-#include <arpa/inet.h>
 #include <errno.h>
-#include <event2/buffer.h>
-#include <event2/event.h>
-#include <event2/http.h>
-#include <netinet/in.h>
 #include <signal.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#include <syslog.h>
+
+#include <event2/buffer.h>
+#include <event2/event.h>
+#include <event2/http.h>
+#include <event2/keyvalq_struct.h>
+
+#include "arena.h"
+#include "auth.h"
+#include "commands.h"
+#include "utils.h"
 
 #define PORT 8000
-
-#define DEBUG true
-
-#define DO_PRAGMA(x) _Pragma(#x)
-
-#ifdef DEBUG
-#define TODO(msg) DO_PRAGMA(message("TODO: " msg))
-#else
-#define TODO(msg)
-#endif
-
 #define AUTH_HEADER_KEY "access_token"
 
-// Callbacks
-static void todo_callback(struct evhttp_request *req, void *ctx);
-void health_callback(struct evhttp_request *req, void *ctx);
-
-// Internal types
-struct {
+// -- Route Definition --
+typedef struct {
     const char *path;
     enum evhttp_cmd_type method;
-    void (*callback)(struct evhttp_request *req, void *);
-    TODO("Add Command table");
-} typedef route;
+    void (*callback)(struct evhttp_request *req, void *ctx);
+} route;
 
-// Globals
+// -- Forward Declarations --
+void health_callback(struct evhttp_request *req, void *ctx);
+void reboot_callback(struct evhttp_request *req, void *ctx);
+void restart_callback(struct evhttp_request *req, void *ctx);
+void sync_upstream_callback(struct evhttp_request *req, void *ctx);
+void deploy_branch_callback(struct evhttp_request *req, void *ctx);
+void teardown_branch_callback(struct evhttp_request *req, void *ctx);
+void logs_callback(struct evhttp_request *req, void *ctx);
 
-// ROUTE/METHOD/CALLBACK CONFIG
+// -- Route Table --
 route ROUTES_CONFIG[] = {
-    {
-        "/health",
-        EVHTTP_REQ_GET,
-        health_callback,
-    },
-    {
-        "/reboot",
-        EVHTTP_REQ_POST,
-        todo_callback,
-    },
-    {
-        "/restart",
-        EVHTTP_REQ_POST,
-        todo_callback,
-    },
-    {
-        "/sync_upstream",
-        EVHTTP_REQ_PUT,
-        todo_callback,
-    },
-    {
-        "/deploy_branch",
-        EVHTTP_REQ_GET,
-        todo_callback,
-    },
-    {
-        "/teardown_branch",
-        EVHTTP_REQ_DELETE,
-        todo_callback,
-    },
-    {
-        "/logs",
-        EVHTTP_REQ_GET,
-        todo_callback,
-    },
+    {"/health", EVHTTP_REQ_GET, health_callback},
+    {"/reboot", EVHTTP_REQ_POST, reboot_callback},
+    {"/restart", EVHTTP_REQ_POST, restart_callback},
+    {"/sync_upstream", EVHTTP_REQ_PUT, sync_upstream_callback},
+    {"/deploy_branch", EVHTTP_REQ_GET, deploy_branch_callback},
+    {"/teardown_branch", EVHTTP_REQ_DELETE, teardown_branch_callback},
+    {"/logs", EVHTTP_REQ_GET, logs_callback},
 };
 
-int lengthRoutes = sizeof(ROUTES_CONFIG) / sizeof(route);
+const size_t NUM_ROUTES = sizeof(ROUTES_CONFIG) / sizeof(route);
 
-// Helpers
-
-static inline const char *http_method_str(enum evhttp_cmd_type cmd_type) {
-    switch (cmd_type) {
-    case EVHTTP_REQ_GET:
-        return "GET";
-        break;
-    case EVHTTP_REQ_POST:
-        return "POST";
-        break;
-
-    case EVHTTP_REQ_PUT:
-        return "PUT";
-        break;
-
-    case EVHTTP_REQ_PATCH:
-        return "PATCH";
-        break;
-
-    case EVHTTP_REQ_HEAD:
-        return "HEAD";
-        break;
-
-    case EVHTTP_REQ_DELETE:
-        return "DELETE";
-        break;
-
-    case EVHTTP_REQ_OPTIONS:
-        return "OPTIONS";
-        break;
-
-    case EVHTTP_REQ_TRACE:
-        return "TRACE";
-        break;
-
-    case EVHTTP_REQ_CONNECT:
-        return "CONNECT";
-        break;
-
-    default:
-        return "Unknown method";
-        break;
-    }
-}
-
-static inline void raise_auth_error(struct evhttp_request *req) {
-
-    evhttp_send_error(req, 401, "Authentication Error\n");
-}
-
-static inline void raise_internal_error(struct evhttp_request *req) {
-
-    evhttp_send_error(req, HTTP_INTERNAL, NULL);
-}
-
-static inline void raise_method_error(struct evhttp_request *req) {
-
-    evhttp_send_error(req, HTTP_BADMETHOD, NULL);
-}
+// -- Middleware --
 
 void auth_middleware(struct evhttp_request *req, void *ctx) {
+    size_t i = (size_t)(intptr_t)ctx;
 
-    // Find associated route
-    unsigned int i = (int)(intptr_t)ctx;
-    // Enforce auth here
+    if (i >= NUM_ROUTES) {
+        log_error("Dispatch error: invalid route index");
+        send_json_error(req, 500, "Internal Server Error");
+        return;
+    }
 
     // Extract value from request header
     struct evkeyvalq *headers = evhttp_request_get_input_headers(req);
     const char *client_auth_key = evhttp_find_header(headers, AUTH_HEADER_KEY);
 
     if (!client_auth_key) {
-        // If no key provided
-        fprintf(stderr, "Middleware: Authentication Error\n");
-        raise_auth_error(req);
+        log_error("Middleware: Authentication Error (Missing Header)");
+        send_json_error(req, 401, "Authentication Error");
         return;
     }
 
-    // Pass key to auth helper
     if (authenticate(client_auth_key)) {
-        // Auth returns 1 , if request the req_key matches server client key
+        log_request(req, ROUTES_CONFIG[i].path);
+        // DISPATCH TO ROUTE CALLBACK
         ROUTES_CONFIG[i].callback(req, ctx);
-        return;
     } else {
-        // If hex decode failed , key was incorrect
-        raise_auth_error(req);
-        return;
+        log_error("Middleware: Authentication Error (Invalid Key)");
+        send_json_error(req, 401, "Authentication Error");
     }
 }
+
+// -- Helpers --
+
+void validate_and_run(struct evhttp_request *req, void *ctx, char *(*runner)(int *)) {
+    size_t i = (size_t)(intptr_t)ctx;
+    if (evhttp_request_get_command(req) != ROUTES_CONFIG[i].method) {
+        send_json_error(req, 405, "Method Not Allowed");
+        return;
+    }
+
+    int exit_code = 0;
+    char *output = runner(&exit_code);
+
+    if (exit_code == 0) {
+        send_json_response(req, 200, "ok", "Command executed", output);
+    } else {
+        send_json_response(req, 500, "error", "Command failed", output ? output : "Unknown error");
+    }
+
+    if (output)
+        deallocate(output);
+}
+
+void validate_and_run_arg(struct evhttp_request *req, void *ctx,
+                          char *(*runner)(const char *, int *), const char *arg_key) {
+    size_t i = (size_t)(intptr_t)ctx;
+    if (evhttp_request_get_command(req) != ROUTES_CONFIG[i].method) {
+        send_json_error(req, 405, "Method Not Allowed");
+        return;
+    }
+
+    char *arg = get_query_param(req, arg_key);
+
+    int exit_code = 0;
+    char *output = runner(arg, &exit_code);
+
+    if (arg)
+        free(arg);
+
+    if (exit_code == 0) {
+        send_json_response(req, 200, "ok", "Command executed", output);
+    } else {
+        send_json_response(req, 500, "error", "Command failed", output ? output : "Unknown error");
+    }
+
+    if (output)
+        deallocate(output);
+}
+
+// -- Callbacks --
 
 void health_callback(struct evhttp_request *req, void *ctx) {
-
-    int i = (int)(intptr_t)ctx;
-    TODO("Make this dry");
-    const char *route = ROUTES_CONFIG[i].path;
-    enum evhttp_cmd_type request_method = evhttp_request_get_command(req);
-    enum evhttp_cmd_type allowed_route_method = ROUTES_CONFIG[i].method;
-    fprintf(stderr, "Got request for route: %s \n", route);
-
-    // If request method is not allowed from event_config , send error to request
-    if (request_method != allowed_route_method) {
-        fprintf(stderr, "Refusing method %s on route %s \n", http_method_str(request_method),
-                route);
-        raise_method_error(req);
-    }
-
-    TODO("Create and send health response")
-    // If we got here then this is a correct request
-    struct evbuffer *reply = evbuffer_new();
-    evbuffer_add_printf(reply, "ACK: %s \n", route);
-    evhttp_send_reply(req, HTTP_OK, NULL, reply);
-    evbuffer_free(reply);
+    validate_and_run(req, ctx, run_health);
 }
 
-void todo_callback(struct evhttp_request *req, void *ctx) {
-    TODO("Implement callback")
-
-    // This callback is invoked with the parameter i
-    // (i) maps which route was called
-    // TODO: handle route based dispatch
-    // TODO: implement generic dispatch table
-    int i = (int)(intptr_t)ctx;
-    const char *path = ROUTES_CONFIG[i].path;
-    fprintf(stderr, "Got request for route: %s \n", path);
-
-    struct evbuffer *reply = evbuffer_new();
-    evbuffer_add_printf(reply, "ACK: %s \n", path);
-    evhttp_send_reply(req, HTTP_OK, NULL, reply);
-    evbuffer_free(reply);
+void reboot_callback(struct evhttp_request *req, void *ctx) {
+    validate_and_run(req, ctx, run_reboot);
 }
+
+void restart_callback(struct evhttp_request *req, void *ctx) {
+    validate_and_run(req, ctx, run_restart);
+}
+
+void logs_callback(struct evhttp_request *req, void *ctx) { validate_and_run(req, ctx, run_logs); }
+
+void sync_upstream_callback(struct evhttp_request *req, void *ctx) {
+    validate_and_run_arg(req, ctx, run_git_pull, "branch");
+}
+
+void deploy_branch_callback(struct evhttp_request *req, void *ctx) {
+    validate_and_run_arg(req, ctx, run_deploy_branch, "branch");
+}
+
+void teardown_branch_callback(struct evhttp_request *req, void *ctx) {
+    validate_and_run_arg(req, ctx, run_teardown_branch, "branch");
+}
+
+// -- Setup --
 
 static void signal_cb(evutil_socket_t fd, short event, void *arg) {
-
     (void)event;
     printf("%s Shutting down server...\n", strsignal(fd));
     event_base_loopbreak(arg);
 }
 
 static void generic_request_handler(struct evhttp_request *req, void *ctx) {
-    // This is a generic callback invoked by the server on a http request , that does not match
-    // evhttp_set_cb routes this method refuses every routes and methods that are not listed in
-    // ROUTES
     (void)ctx;
-
-    fprintf(stderr, "Got request for unallowed path \n");
-
-    evhttp_send_error(req, HTTP_BADREQUEST, NULL);
+    log_info("Got request for unallowed path");
+    send_json_error(req, 404, "Route not found");
 }
 
 int main() {
-    ev_uint16_t http_port = PORT;
-    char *http_addr = "0.0.0.0";
-    struct event_base *base;
-    struct evhttp *http_server;
-    struct event *sig_int;
-    int ret = 0;
+    prealloc_arena();
+    openlog("cmon", LOG_PID | LOG_CONS, LOG_DAEMON);
 
-    base = event_base_new();
-
+    struct event_base *base = event_base_new();
     if (!base) {
-        fprintf(stderr, "Error: Event base is null \n");
+        fprintf(stderr, "Error: Event base is null\n");
         return 1;
     }
 
-    http_server = evhttp_new(base);
-
+    struct evhttp *http_server = evhttp_new(base);
     if (!http_server) {
-        fprintf(stderr, "Error: Server is null \n");
+        fprintf(stderr, "Error: Server is null\n");
         return 1;
     }
 
-    // Bind the server to system socket
-    if ((ret = evhttp_bind_socket(http_server, http_addr, http_port)) != 0) {
+    if (evhttp_bind_socket(http_server, "0.0.0.0", PORT) != 0) {
         perror("Bind");
         return 1;
     }
 
-    // Sets the what HTTP methods are supported in requests accepted by this
-    // server, and passed to user callbacks.
-    // unsupported requests return 501
-    enum evhttp_cmd_type ALLOWED_METHODS =
-        EVHTTP_REQ_GET | EVHTTP_REQ_POST | EVHTTP_REQ_PUT | EVHTTP_REQ_DELETE;
-    evhttp_set_allowed_methods(http_server, ALLOWED_METHODS);
+    evhttp_set_allowed_methods(http_server, EVHTTP_REQ_GET | EVHTTP_REQ_POST | EVHTTP_REQ_PUT |
+                                                EVHTTP_REQ_DELETE);
 
-    // Register all the routes with their callbacks to the server
-    // To mimic the bheaviour of the middleware we will allow a singular method to be registered for
-    // callback and then that method will pass callback to associated route handler
-    for (int i = 0; i < lengthRoutes; ++i) {
-        if ((ret = evhttp_set_cb(http_server, ROUTES_CONFIG[i].path, auth_middleware,
-                                 (void *)(intptr_t)i)) != 0) {
-            perror("evhttp_set_cb: ");
-        }
+    for (size_t i = 0; i < NUM_ROUTES; ++i) {
+        evhttp_set_cb(http_server, ROUTES_CONFIG[i].path, auth_middleware, (void *)(intptr_t)i);
     }
 
-    // Register generic http callback
-    // This catches the request that will not be hanlded by any registered callbacks ,
-    // registered with evhttp_set_cb
-    // request returns 401 Bad request
     evhttp_set_gencb(http_server, generic_request_handler, NULL);
 
-    // Handle SIGINT and in future and SIGKILL here
-    sig_int = evsignal_new(base, SIGINT, signal_cb, base);
-    if ((ret = event_add(sig_int, NULL)) != 0) {
-        perror("event_add");
-    }
+    struct event *sig_int = evsignal_new(base, SIGINT, signal_cb, base);
+    event_add(sig_int, NULL);
 
-    printf("Listening requests on http://%s:%d\n", http_addr, http_port);
+    printf("Listening requests on http://0.0.0.0:%d\n", PORT);
+    event_base_dispatch(base);
 
-    // Start the server event loop
-    if ((ret = event_base_dispatch(base)) != 0) {
-        perror("event_base_dispatch");
-        return 1;
-    }
-
-    // Teardown
+    syslog(LOG_INFO, "Server stopping");
+    closelog();
+    teardown_arena();
     evhttp_free(http_server);
     event_free(sig_int);
     event_base_free(base);
+
+    return 0;
 }
