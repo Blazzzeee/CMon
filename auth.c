@@ -118,14 +118,14 @@ int authenticate(const char *request_key_hex) {
 
     if (!request_key_hex) {
         fprintf(stderr, "The request auth key is null\n");
-        return 0;
+        return 1;
     }
 
     unsigned char req_key[KEY_LEN_BYTES];
 
     if (decode_buf_from_hex(request_key_hex, req_key, KEY_LEN_BYTES)) {
         fprintf(stderr, "Middleware: Authentication Error\n");
-        return 0;
+        return 1;
     }
 
     return CRYPTO_memcmp(expected_key, req_key, KEY_LEN_BYTES);
