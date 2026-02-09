@@ -6,13 +6,8 @@
 #include <string.h>
 #include <unistd.h>
 
-#ifndef BUF_SIZE
-// Crash program
-#endif
-
-#ifndef BUF_NUM
-// Crash program
-#endif
+size_t arena_buf_size = 256;
+size_t arena_buf_num = 64;
 
 // Means there can only exist one arena at a time, since the state is global
 static uint64_t LOCK = 0;
@@ -34,11 +29,20 @@ typedef struct {
         }                                                                                          \
     } while (0)
 
+void arena_config(size_t buf_size, size_t buf_num) {
+    if (buf_num > 64) {
+        fprintf(stderr, "arena_config: MAX_buf_num is 64\n");
+        buf_num = 64;
+    }
+    arena_buf_size = buf_size;
+    arena_buf_num = buf_num;
+}
+
 // Initialises arena for future allocations
 void *prealloc_arena() {
 
     void *tmp;
-    size_t total_size = (size_t)BUF_SIZE * (size_t)BUF_NUM;
+    size_t total_size = arena_buf_size * arena_buf_num;
     // Reset lock to zero
     LOCK = 0;
 
@@ -63,7 +67,7 @@ void *check_and_claim(size_t req) {
     // Convert bytes to number of chunks
     // We add metadata to keep track of allocation length
     size_t need = req + sizeof(arena_hdr_t);
-    uint64_t k = (need + BUF_SIZE - 1) / BUF_SIZE;
+    uint64_t k = (need + arena_buf_size - 1) / arena_buf_size;
 
     int start_bit = find_k_consecutive_zeroes(k);
     if (start_bit == -1)
@@ -80,7 +84,7 @@ void *check_and_claim(size_t req) {
     // Use __atomic_fetch_or for true thread safety if needed
     LOCK |= claim_mask;
 
-    char *base = (char *)BUF + (start_bit * BUF_SIZE);
+    char *base = (char *)BUF + (start_bit * arena_buf_size);
     // Internal 2 byte book keeping structhure enforced in
     // allocations , which helps in deallocation
     arena_hdr_t *hdr = (arena_hdr_t *)base;
@@ -167,28 +171,27 @@ void deallocate(void *ptr) {
     // Sanity checks
 
     // Protect from random pointers
-    if ((char *)hdr < (char *)BUF ||
-        (char *)hdr >= (char *)BUF + (size_t)BUF_SIZE * (size_t)BUF_NUM) {
+    if ((char *)hdr < (char *)BUF || (char *)hdr >= (char *)BUF + arena_buf_size * arena_buf_num) {
         fprintf(stderr, "arena_free: invalid pointer\n");
         return;
     }
 
     // If metadata was corrupted , we cant deallocate
-    if (k == 0 || k > BUF_NUM || k > 64) {
+    if (k == 0 || k > arena_buf_num || k > 64) {
         fprintf(stderr, "arena_free: corrupted header (k=%lu)\n", k);
         return;
     }
 
     // end of allocation fits
-    char *end = (char *)hdr + k * BUF_SIZE;
-    if (end > (char *)BUF + (size_t)BUF_SIZE * BUF_NUM) {
+    char *end = (char *)hdr + k * arena_buf_size;
+    if (end > (char *)BUF + arena_buf_size * arena_buf_num) {
         fprintf(stderr, "arena_free: allocation overruns arena\n");
         return;
     }
 
     // Compute chunk start
     size_t offset = (char *)hdr - (char *)BUF;
-    uint64_t start_bit = offset / BUF_SIZE;
+    uint64_t start_bit = offset / arena_buf_size;
 
     // Build mask
     uint64_t mask = ((k == 64) ? ~0ULL : ((1ULL << k) - 1)) << start_bit;
@@ -206,7 +209,7 @@ void teardown_arena(void) {
 
 #ifdef ARENA_DEBUG
     // Optional: poison memory to catch use-after-free bugs
-    memset(BUF, 0xDD, BUF_SIZE * BUF_NUM);
+    memset(BUF, 0xDD, arena_buf_size * arena_buf_num);
 #endif
 
     free(BUF);
