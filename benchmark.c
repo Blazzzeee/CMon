@@ -46,8 +46,8 @@ RunResult run_benchmark(int use_arena, int is_warmup, DecisionTable *table) {
     void *ptrs[BATCH_SIZE] = {0};
     void *zombies[ZOMBIE_POOL_SIZE] = {0};
     double *latencies = malloc(sizeof(double) * SAMPLE_SIZE);
-    int sample_count = 0;
-    const size_t sz = BUF_SIZE - 64;
+    size_t sample_count = 0;
+    const size_t sz = arena_buf_size - 64;
 
     if (use_arena)
         prealloc_arena();
