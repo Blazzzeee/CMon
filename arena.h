@@ -4,11 +4,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define BUF_SIZE (256) 
+extern size_t arena_buf_size;
+extern size_t arena_buf_num;
 
-#define BUF_NUM 64
+#define BITMAP_WORDS (arena_buf_num / 64)
 
-#define BITMAP_WORDS (BUF_NUM / 64)
+// Configures the arena size and number of buffers
+void arena_config(size_t buf_size, size_t buf_num);
 // Initializes the arena
 void *prealloc_arena();
 
@@ -22,6 +24,5 @@ void deallocate(void *ptr);
 void teardown_arena();
 
 int find_k_consecutive_zeroes(int k);
-
 
 #endif
