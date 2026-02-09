@@ -68,7 +68,7 @@ void auth_middleware(struct evhttp_request *req, void *ctx) {
         return;
     }
 
-    if (authenticate(client_auth_key)) {
+    if (!authenticate(client_auth_key)) {
         log_request(req, ROUTES_CONFIG[i].path);
         // DISPATCH TO ROUTE CALLBACK
         ROUTES_CONFIG[i].callback(req, ctx);
@@ -170,6 +170,11 @@ static void generic_request_handler(struct evhttp_request *req, void *ctx) {
 
 int main() {
     prealloc_arena();
+
+    if (init_auth()) {
+
+        log_error("init auth failed \n");
+    }
     openlog("cmon", LOG_PID | LOG_CONS, LOG_DAEMON);
 
     struct event_base *base = event_base_new();
