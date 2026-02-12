@@ -22,6 +22,7 @@
                 flamegraph
                 python3
                 curl
+                k6
 
         ];
     };

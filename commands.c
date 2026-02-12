@@ -3,6 +3,7 @@
 #include "utils.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -44,7 +45,11 @@ char *run_cmd_argv(const char *path, char *const argv[], int *exit_code_out) {
     // parent
     close(pipefd[1]);
 
-    char *output = allocate(arena_buf_size);
+    // Dynamic allocation using arena
+    size_t capacity = 512;
+    size_t total = 0;
+    char *output = allocate(capacity);
+
     if (!output) {
         log_error("allocate failed in run_cmd_argv");
         close(pipefd[0]);
@@ -52,12 +57,49 @@ char *run_cmd_argv(const char *path, char *const argv[], int *exit_code_out) {
         return NULL;
     }
 
-    ssize_t total = 0;
+    char temp_buf[512];
     ssize_t n;
-    while ((n = read(pipefd[0], output + total, arena_buf_size - 1 - total)) > 0) {
+    while ((n = read(pipefd[0], temp_buf, sizeof(temp_buf))) > 0) {
+        if (total + n >= capacity) {
+            // Grow buffer
+            size_t new_capacity = capacity * 2;
+            // Cap at some reasonable limit if needed, e.g. 1MB?
+            // The user said "shouldnt really bother us to have super large size"
+
+            char *new_output = allocate(new_capacity);
+            if (!new_output) {
+                log_error("allocate failed during growth");
+                break; // Stop reading, return what we have
+            }
+
+            memcpy(new_output, output, total);
+            deallocate(output);
+            output = new_output;
+            capacity = new_capacity;
+        }
+
+        memcpy(output + total, temp_buf, n);
         total += n;
-        if ((size_t)total >= arena_buf_size - 1)
-            break;
+    }
+
+    // Ensure null termination (might need 1 more byte if full)
+    if (total == capacity) {
+        // This is a rare edge case where we filled exactly.
+        // We need 1 byte for 0. Allocating just 1 byte more essentially means
+        // growing substantially in arena terms (min chunk), but we must do it.
+        // Or we can just grow by small amount.
+        size_t new_capacity = capacity + 512; // Grow by one chunk
+        char *new_output = allocate(new_capacity);
+        if (new_output) {
+            memcpy(new_output, output, total);
+            deallocate(output);
+            output = new_output;
+            // capacity = new_capacity;
+        } else {
+            // If fails, we truncate the last byte to fit null?
+            // Or strict fail? Truncating is safer for stability.
+            total--;
+        }
     }
     output[total] = '\0';
     close(pipefd[0]);
@@ -123,6 +165,6 @@ char *run_teardown_branch(const char *branch, int *exit_code) {
 }
 
 char *run_logs(int *exit_code) {
-    char *argv[] = {"journalctl", "-n", "50", "--no-pager", NULL};
+    char *argv[] = {"journalctl", "-t", "cmon", "-n", "50", "--no-pager", NULL};
     return run_cmd_argv("journalctl", argv, exit_code);
 }

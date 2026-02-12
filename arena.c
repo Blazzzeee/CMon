@@ -6,7 +6,7 @@
 #include <string.h>
 #include <unistd.h>
 
-size_t arena_buf_size = 256;
+size_t arena_buf_size = 512;
 size_t arena_buf_num = 64;
 
 // Means there can only exist one arena at a time, since the state is global
@@ -198,8 +198,6 @@ void deallocate(void *ptr) {
 
     // Clear bits
     LOCK &= ~mask;
-
-    // TODO: memset maybe
 }
 
 void teardown_arena(void) {
