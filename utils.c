@@ -159,23 +159,45 @@ char *json_escape(const char *input) {
 
 static char *create_response_template(int code, const char *status, const char *message,
                                       const char *data) {
-    char *json = allocate(arena_buf_size);
-    if (!json)
-        return NULL;
+    char *json = NULL;
+    size_t needed = 0;
 
     if (data) {
         char *escaped_data = json_escape(data);
-        if (escaped_data) {
-            snprintf(json, arena_buf_size,
-                     "{\"status\": \"%s\", \"code\": %d, \"message\": \"%s\", \"data\": \"%s\"}",
-                     status, code, message, escaped_data);
-            deallocate(escaped_data);
-        } else {
-            deallocate(json);
+        if (!escaped_data) {
             return NULL;
         }
+
+        // Calculate required size (snprintf returns the number of chars that would be written)
+        needed =
+            snprintf(NULL, 0,
+                     "{\"status\": \"%s\", \"code\": %d, \"message\": \"%s\", \"data\": \"%s\"}",
+                     status, code, message, escaped_data) +
+            1; // +1 for null terminator
+
+        json = allocate(needed);
+        if (!json) {
+            deallocate(escaped_data);
+            return NULL;
+        }
+
+        snprintf(json, needed,
+                 "{\"status\": \"%s\", \"code\": %d, \"message\": \"%s\", \"data\": \"%s\"}",
+                 status, code, message, escaped_data);
+        deallocate(escaped_data);
     } else {
-        snprintf(json, arena_buf_size,
+        // Calculate required size
+        needed = snprintf(NULL, 0,
+                          "{\"status\": \"%s\", \"code\": %d, \"message\": \"%s\", \"data\": null}",
+                          status, code, message) +
+                 1; // +1 for null terminator
+
+        json = allocate(needed);
+        if (!json) {
+            return NULL;
+        }
+
+        snprintf(json, needed,
                  "{\"status\": \"%s\", \"code\": %d, \"message\": \"%s\", \"data\": null}", status,
                  code, message);
     }
@@ -188,14 +210,18 @@ void send_json_response(struct evhttp_request *req, int code, const char *status
     char *json_resp = create_response_template(code, status, msg, data);
 
     if (json_resp) {
-        evbuffer_add_printf(reply, "%s\n", json_resp);
+        evbuffer_add(reply, json_resp, strlen(json_resp));
         deallocate(json_resp);
     } else {
-        evbuffer_add_printf(reply, "{\"error\": \"alloc failed\"}\n");
+        const char *err = "{\"error\": \"alloc failed\"}";
+        evbuffer_add(reply, err, strlen(err));
         code = 500;
     }
 
-    evhttp_send_reply(req, (code == 200) ? HTTP_OK : HTTP_INTERNAL, NULL, reply);
+    struct evkeyvalq *headers = evhttp_request_get_output_headers(req);
+    evhttp_add_header(headers, "Content-Type", "application/json; charset=utf-8");
+
+    evhttp_send_reply(req, code, NULL, reply);
     evbuffer_free(reply);
 }
 
@@ -203,12 +229,20 @@ void send_json_error(struct evhttp_request *req, int code, const char *msg) {
     struct evbuffer *reply = evbuffer_new();
     char *json_resp = create_response_template(code, "error", msg, NULL);
     if (json_resp) {
-        evbuffer_add_printf(reply, "%s\n", json_resp);
+        evbuffer_add(reply, json_resp, strlen(json_resp));
         deallocate(json_resp);
     }
+
+    struct evkeyvalq *headers = evhttp_request_get_output_headers(req);
+    evhttp_add_header(headers, "Content-Type", "application/json; charset=utf-8");
+
     evhttp_send_reply(req, code, msg, reply);
     evbuffer_free(reply);
 }
+
+// HTTP Helpers
+const char *http_method_str(enum evhttp_cmd_type cmd_type);
+char *get_query_param(struct evhttp_request *req, const char *key);
 
 char *get_query_param(struct evhttp_request *req, const char *key) {
     if (!req || !key)

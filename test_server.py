@@ -88,7 +88,7 @@ try:
     data = res.read()
     conn.close()
     
-    if res.status == 200:
+    if res.status in [200, 202]:
         j = json.loads(data)
         if "status" in j:
              print(f"PASS ({res.status})")

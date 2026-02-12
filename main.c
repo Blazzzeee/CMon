@@ -172,10 +172,13 @@ int main() {
     prealloc_arena();
 
     if (init_auth()) {
-
         log_error("init auth failed \n");
+        return 1;
+    } else {
+        log_info("Auth module loaded");
     }
-    openlog("cmon", LOG_PID | LOG_CONS, LOG_DAEMON);
+
+    openlog("cmon", LOG_PID | LOG_CONS, LOG_LOCAL0);
 
     struct event_base *base = event_base_new();
     if (!base) {
