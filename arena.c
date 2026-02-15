@@ -7,11 +7,20 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-size_t arena_buf_size = 512;
-size_t arena_buf_num = 64;
+#define MEMBER_BITS 64
+
+#define MEMBER_INDEX(bit) ((bit) / MEMBER_BITS)
+#define BIT_OFFSET(bit) ((bit) % MEMBER_BITS)
+#define GLOBAL_BIT(member, bit) ((member) * MEMBER_BITS + (bit))
+#define ARENA_BUF_NUM 64
+#define ARENA_BUF_SIZE 512
+
+size_t arena_buf_size = ARENA_BUF_SIZE;
+size_t arena_buf_num = ARENA_BUF_NUM;
+size_t arena_lock_members = 0;
 
 // Means there can only exist one arena at a time, since the state is global
-static uint64_t LOCK = 0;
+static uint64_t *LOCK;
 // TODO: Extend number of chunks , by using bitmask array
 // Note this lock should only be used for
 // tracking chunks in buf , not for Synchronization
@@ -32,12 +41,10 @@ typedef struct {
     } while (0)
 
 void arena_config(size_t buf_size, size_t buf_num) {
-    if (buf_num > 64) {
-        fprintf(stderr, "arena_config: MAX_buf_num is 64\n");
-        buf_num = 64;
-    }
     arena_buf_size = buf_size;
     arena_buf_num = buf_num;
+
+    arena_lock_members = (arena_buf_num + MEMBER_BITS - 1) / MEMBER_BITS;
 }
 
 // Initialises arena for future allocations
@@ -45,9 +52,22 @@ void *prealloc_arena() {
 
     void *tmp;
     size_t total_size = arena_buf_size * arena_buf_num;
-    // Reset lock to zero
-    LOCK = 0;
 
+    if (!arena_lock_members) {
+        arena_lock_members = (arena_buf_num + MEMBER_BITS - 1) / MEMBER_BITS;
+    }
+
+    if ((tmp = malloc(sizeof(uint64_t) * arena_lock_members)) == NULL) {
+        fprintf(stderr, "prealloc_arena \n");
+        return NULL;
+    } else {
+        LOCK = tmp;
+    }
+
+    // Reset lock to zero
+    memset(LOCK, 0, sizeof(uint64_t) * arena_lock_members);
+
+    tmp = NULL;
     // Initialise global memory , that will be used for arena allocations
     // tmp = malloc(total_size);
     tmp = mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -70,24 +90,43 @@ void *prealloc_arena() {
 void *check_and_claim(size_t req) {
     // Convert bytes to number of chunks
     // We add metadata to keep track of allocation length
+    int start_bit = -1;
     size_t need = req + sizeof(arena_hdr_t);
     uint64_t k = (need + arena_buf_size - 1) / arena_buf_size;
 
-    int start_bit = find_k_consecutive_zeroes(k);
+    for (size_t m = 0; m < arena_lock_members; m++) {
+
+        uint64_t free_mask = ~LOCK[m];
+        int local_bit = find_k_consecutive_zeroes(free_mask, k);
+
+        /* 🚨 ensure allocation does not cross member boundary */
+        if ((size_t)local_bit + k > MEMBER_BITS)
+            continue;
+
+        if (local_bit != -1) {
+            start_bit = (m * 64) + local_bit;
+            break;
+        }
+    }
+
     if (start_bit == -1)
+        // Try next 64 bit member
         return NULL;
 
+    size_t member = start_bit / 64;
+    size_t bit = start_bit % 64;
+
+    uint64_t claim_mask = (k == 64) ? ~0ULL : ((1ULL << k) - 1);
+
+    claim_mask <<= bit;
     // Create a mask of K bits set to 1
     // e.g., if k=3, mask is 0...0111
-    uint64_t claim_mask = (k == 64) ? ~0ULL : (1ULL << k) - 1;
 
     // Shift it to the correct position
-    claim_mask <<= start_bit;
-
     // Mark these bits as USED (set to 1) in our global lock
     // Use __atomic_fetch_or for true thread safety if needed
-    LOCK |= claim_mask;
 
+    LOCK[member] |= claim_mask;
     char *base = (char *)BUF + (start_bit * arena_buf_size);
     // Internal 2 byte book keeping structhure enforced in
     // allocations , which helps in deallocation
@@ -100,12 +139,11 @@ void *check_and_claim(size_t req) {
 
 // O(1) running tine for given K ,
 // use bit smear algo on the bitmask
-int find_k_consecutive_zeroes(int k) {
+int find_k_consecutive_zeroes(uint64_t free_mask, int k) {
 
     if (k <= 0)
         return -1;
-    uint64_t free_mask, combined;
-    free_mask = ~LOCK;
+    uint64_t combined;
 
     if (free_mask == 0) {
         fprintf(stderr, "FATAL: k_zeroes: Buffer overflow\n");
@@ -114,6 +152,7 @@ int find_k_consecutive_zeroes(int k) {
 
     combined = free_mask;
 
+    // TODO: In multithreaded context we can replace this with atomic fetch and
     // We shift and AND the mask k-1 times.
     // After k-1 iterations, any bit still set to 1 in 'combined'
     // represents the START of a sequence of k consecutive 1s in free_mask.
@@ -123,7 +162,6 @@ int find_k_consecutive_zeroes(int k) {
 
     // The free bits are marked as 1
     if (combined == 0) {
-        fprintf(stderr, "FATAL: no k-consecutive-zeroes\n");
         return -1;
     }
 
@@ -198,10 +236,16 @@ void deallocate(void *ptr) {
     uint64_t start_bit = offset / arena_buf_size;
 
     // Build mask
-    uint64_t mask = ((k == 64) ? ~0ULL : ((1ULL << k) - 1)) << start_bit;
+    size_t member = MEMBER_INDEX(start_bit);
+    size_t bit = BIT_OFFSET(start_bit);
+
+    if (bit + k > MEMBER_BITS)
+        return;
+
+    uint64_t mask = ((1ULL << k) - 1) << bit;
 
     // Clear bits
-    LOCK &= ~mask;
+    LOCK[member] &= ~mask;
 }
 
 void teardown_arena(void) {
@@ -217,5 +261,10 @@ void teardown_arena(void) {
     size_t total_size = arena_buf_size * arena_buf_num;
     munmap(BUF, total_size);
     BUF = NULL;
-    LOCK = 0;
+
+    if (LOCK) {
+        free(LOCK);
+        LOCK = NULL;
+    }
+    arena_lock_members = 0;
 }

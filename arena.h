@@ -23,6 +23,6 @@ void deallocate(void *ptr);
 // Tears down execution
 void teardown_arena();
 
-int find_k_consecutive_zeroes(int k);
+int find_k_consecutive_zeroes(uint64_t free_mask , int k);
 
 #endif
