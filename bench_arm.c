@@ -12,9 +12,9 @@
 /* ================= CONFIG ================= */
 
 /* Pi 5 optimized */
-#define TOTAL_ALLOCATIONS 5000ULL
-#define SAMPLE_INTERVAL 32
-#define SAMPLE_SIZE (TOTAL_ALLOCATIONS / SAMPLE_INTERVAL)
+#define TOTAL_ALLOCATIONS 200000ULL
+#define SAMPLE_SIZE 4000
+#define SAMPLE_INTERVAL (TOTAL_ALLOCATIONS / SAMPLE_SIZE)
 #define BATCH_SIZE 8
 #define ZOMBIE_POOL_SIZE 256
 #define NUM_RUNS 9
@@ -270,15 +270,17 @@ int main() {
     RunResult malloc_results[NUM_RUNS];
     RunResult arena_results[NUM_RUNS];
 
-    printf("Warmup...\n");
+    printf("Malloc Warmup...\n");
     run_benchmark(0, 1, table);
-    run_benchmark(1, 1, table);
+    run_benchmark(0, 1, table);
 
     for (int i = 0; i < NUM_RUNS; i++) {
         printf("Running Malloc iteration %d...\n", i + 1);
         malloc_results[i] = run_benchmark(0, 0, table);
     }
 
+    printf("Arena Warmup...\n");
+    run_benchmark(1, 1, table);
     for (int i = 0; i < NUM_RUNS; i++) {
         printf("Running Arena iteration %d...\n", i + 1);
         arena_results[i] = run_benchmark(1, 0, table);
