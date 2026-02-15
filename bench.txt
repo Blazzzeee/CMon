@@ -1,24 +1,27 @@
-
-Starting Purity Warmup (Decision Table mode)...
-Running Malloc iteration 1...
-Running Malloc iteration 2...
-Running Malloc iteration 3...
-Running Malloc iteration 4...
-Running Malloc iteration 5...
-Running Arena iteration 1...
-Running Arena iteration 2...
-Running Arena iteration 3...
-Running Arena iteration 4...
-Running Arena iteration 5...
+Tested on intel ultra core 7 with ./benchmark.c on single core
 
 === MALLOC FINAL AVERAGES (5 RUNS) ===
-Speed:  0.79 M ops/sec
-P50:    2736 cycles
-P99:    10126 cycles
-StdDev: 10564.33
+Speed:  0.06 M ops/sec
+P50:    5084 cycles
+P99:    215015 cycles
+StdDev: 88554.26
 
 === ARENA  FINAL AVERAGES (5 RUNS) ===
-Speed:  69.38 M ops/sec
-P50:    19 cycles
-P99:    30 cycles
-StdDev: 76.28
+Speed:  0.60 M ops/sec
+P50:    4730 cycles
+P99:    5803 cycles
+StdDev: 529.17
+
+Tested on pi 5 with ./bench_arm.c withb taskset
+
+=== MALLOC FINAL AVERAGES (9 RUNS) ===
+Speed:  0.012 M ops/sec
+P50:    6.19 us
+P99:    577.18 us
+StdDev: 9615.61
+
+=== ARENA  FINAL AVERAGES (9 RUNS) ===
+Speed:  0.196 M ops/sec
+P50:    4.99 us
+P99:    6.53 us
+StdDev: 25.53
