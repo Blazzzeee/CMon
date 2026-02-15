@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 size_t arena_buf_size = 512;
@@ -11,6 +12,7 @@ size_t arena_buf_num = 64;
 
 // Means there can only exist one arena at a time, since the state is global
 static uint64_t LOCK = 0;
+// TODO: Extend number of chunks , by using bitmask array
 // Note this lock should only be used for
 // tracking chunks in buf , not for Synchronization
 // in other words this is the internal book keeping
@@ -47,7 +49,9 @@ void *prealloc_arena() {
     LOCK = 0;
 
     // Initialise global memory , that will be used for arena allocations
-    tmp = malloc(total_size);
+    // tmp = malloc(total_size);
+    tmp = mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    // TODO: replace with mmap
 
     if (!tmp) {
         fprintf(stderr, "prealloc_arna: malloc\n");
@@ -210,7 +214,8 @@ void teardown_arena(void) {
     memset(BUF, 0xDD, arena_buf_size * arena_buf_num);
 #endif
 
-    free(BUF);
+    size_t total_size = arena_buf_size * arena_buf_num;
+    munmap(BUF, total_size);
     BUF = NULL;
     LOCK = 0;
 }
