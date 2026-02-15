@@ -2,7 +2,7 @@
 
 **Version**: 2.0  
 **Language**: C  
-**Author**: 3rd Year Tier-2 Student (India)
+**Author**: Blazzee
 
 ---
 
