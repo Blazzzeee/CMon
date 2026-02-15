@@ -9,12 +9,12 @@
 #include <string.h>
 #include <time.h>
 
-#define TOTAL_ALLOCATIONS 1000000ULL
-#define SAMPLE_INTERVAL 64
-#define SAMPLE_SIZE (TOTAL_ALLOCATIONS / SAMPLE_INTERVAL)
-#define BATCH_SIZE 32
+#define TOTAL_ALLOCATIONS 1000000LL
+#define SAMPLE_SIZE 20000
+#define SAMPLE_INTERVAL (TOTAL_ALLOCATIONS / SAMPLE_SIZE)
+#define BATCH_SIZE 1000 * 2
 #define ZOMBIE_POOL_SIZE 6400 * 2
-#define NUM_RUNS 9
+#define NUM_RUNS 5
 
 typedef struct {
     int zombie_idx[65536];
@@ -74,10 +74,11 @@ RunResult run_benchmark(int use_arena, int is_warmup, DecisionTable *table) {
     double *latencies = malloc(sizeof(double) * SAMPLE_SIZE);
     size_t sample_count = 0;
 
-    const size_t sz = 8 * 1024 * 1024; // 8 MB allocations
+    // const size_t sz = 8 * 1024 * 1024; // 8 MB allocations
+    const size_t sz = 256 * 1024; // 256KB per allocation
 
     if (use_arena) {
-        arena_config(sz, 64);
+        arena_config(64 * 1024, 1024); // 64KB chunks, 1024 chunks
         prealloc_arena();
     }
 
@@ -210,14 +211,18 @@ int main() {
     RunResult malloc_results[NUM_RUNS];
     RunResult arena_results[NUM_RUNS];
 
-    printf("Starting Warmup Runs...\n");
+    printf("Starting Warmup Runs for heap...\n");
     run_benchmark(0, 1, table);
-    run_benchmark(1, 1, table);
+    run_benchmark(0, 1, table);
 
     for (int i = 0; i < NUM_RUNS; i++) {
         printf("Running Malloc iteration %d...\n", i + 1);
         malloc_results[i] = run_benchmark(0, 0, table);
     }
+
+    printf("Starting Warmup Runs for arena...\n");
+    run_benchmark(1, 1, table);
+    run_benchmark(1, 1, table);
     for (int i = 0; i < NUM_RUNS; i++) {
         printf("Running Arena iteration %d...\n", i + 1);
         arena_results[i] = run_benchmark(1, 0, table);
