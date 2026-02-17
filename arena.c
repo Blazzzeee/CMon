@@ -99,7 +99,7 @@ void *check_and_claim(size_t req) {
         uint64_t free_mask = ~LOCK[m];
         int local_bit = find_k_consecutive_zeroes(free_mask, k);
 
-        /* 🚨 ensure allocation does not cross member boundary */
+        /* ensure allocation does not cross member boundary */
         if ((size_t)local_bit + k > MEMBER_BITS)
             continue;
 
