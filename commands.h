@@ -2,36 +2,19 @@
 
 #include <event2/event.h>
 
-/*
- * Initialise the async command layer.
- * Must be called once after event_base_new() in main(), before any
- * command function is invoked.
- *
- * NEW: registers the shared SIGCHLD handler that replaces the two
- * blocking waitpid() calls that previously lived in run_cmd_argv().
- */
+// Initialise async command execution. Must be called once after event_base_new().
+// Registers the SIGCHLD handler that reaps children without blocking the event loop.
 void run_cmd_argv_init(struct event_base *base);
 
-/*
- * Tear down the async command layer.
- * Call this in main()'s shutdown path, after event_base_loopbreak()
- * and before event_base_free().
- */
+// Tear down async command execution. Call before teardown_arena() on shutdown.
 void run_cmd_argv_teardown(void);
 
-/*
- * Execute a command asynchronously.
- *
- * CHANGED: no longer blocks.  Forks the child, registers a non-blocking
- * pipe event and a SIGCHLD handler, then returns NULL immediately.
- * *exit_code_out is set to 0 ("accepted").  Actual exit-code and output
- * are processed asynchronously by the event loop.
- *
- * Callers should send an immediate HTTP 202 Accepted response.
- */
+// Execute a command asynchronously. Forks the child and returns immediately.
+// exit_code is set to 0 (accepted) on success, -1 on fork/pipe failure.
+// Output is captured and logged asynchronously by the event loop.
 char *run_cmd_argv(const char *path, char *const argv[], int *exit_code);
 
-/* Specific runners — public API unchanged */
+// Specific runners
 char *run_health(int *exit_code);
 char *run_reboot(int *exit_code);
 char *run_restart(int *exit_code);

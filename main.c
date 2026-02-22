@@ -80,12 +80,6 @@ void auth_middleware(struct evhttp_request *req, void *ctx) {
 
 // -- Helpers --
 
-/*
- * CHANGED: run_cmd_argv() is now non-blocking and always returns NULL.
- * We send HTTP 202 Accepted immediately after the fork succeeds, rather
- * than waiting for the child to exit. Output and exit-code are handled
- * asynchronously by the event loop (see commands.c).
- */
 void validate_and_run(struct evhttp_request *req, void *ctx, char *(*runner)(int *)) {
     size_t i = (size_t)(intptr_t)ctx;
     if (evhttp_request_get_command(req) != ROUTES_CONFIG[i].method) {
@@ -94,20 +88,15 @@ void validate_and_run(struct evhttp_request *req, void *ctx, char *(*runner)(int
     }
 
     int exit_code = 0;
-    char *output = runner(&exit_code);
+    runner(&exit_code);
 
-    // run_cmd_argv() is non-blocking: output is always NULL and exit_code
-    // is 0 ("accepted") on a successful fork, or -1 on a hard failure
-    // (pipe/fork error). We respond immediately in both cases.
+    // run_cmd_argv is non-blocking: it forks and returns immediately.
+    // exit_code 0 means the command was accepted, -1 means fork/pipe failed.
     if (exit_code == 0) {
         send_json_response(req, 202, "ok", "Command accepted", NULL);
     } else {
         send_json_response(req, 500, "error", "Command dispatch failed", NULL);
     }
-
-    // output is always NULL in non-blocking mode, but guard anyway
-    if (output)
-        deallocate(output);
 }
 
 void validate_and_run_arg(struct evhttp_request *req, void *ctx,
@@ -121,20 +110,16 @@ void validate_and_run_arg(struct evhttp_request *req, void *ctx,
     char *arg = get_query_param(req, arg_key);
 
     int exit_code = 0;
-    char *output = runner(arg, &exit_code);
+    runner(arg, &exit_code);
 
     if (arg)
         free(arg);
 
-    // Same non-blocking contract as validate_and_run above.
     if (exit_code == 0) {
         send_json_response(req, 202, "ok", "Command accepted", NULL);
     } else {
         send_json_response(req, 500, "error", "Command dispatch failed", NULL);
     }
-
-    if (output)
-        deallocate(output);
 }
 
 // -- Callbacks --
@@ -189,7 +174,7 @@ int main() {
         log_info("Auth module loaded");
     }
 
-    openlog("cmon", LOG_PID | LOG_CONS, LOG_DAEMON); // CHANGED: LOG_LOCAL0 -> LOG_DAEMON
+    openlog("cmon", LOG_PID | LOG_CONS, LOG_DAEMON);
 
     struct event_base *base = event_base_new();
     if (!base) {
@@ -197,8 +182,7 @@ int main() {
         return 1;
     }
 
-    // ADDED: initialise the async command layer and its SIGCHLD handler.
-    // Must be called after event_base_new() and before the event loop starts.
+    // Register the SIGCHLD handler that makes command execution non-blocking
     run_cmd_argv_init(base);
 
     struct evhttp *http_server = evhttp_new(base);
@@ -212,7 +196,8 @@ int main() {
         return 1;
     }
 
-    evhttp_set_allowed_methods(http_server, EVHTTP_REQ_GET | EVHTTP_REQ_POST | EVHTTP_REQ_PUT | EVHTTP_REQ_DELETE);
+    evhttp_set_allowed_methods(http_server, EVHTTP_REQ_GET | EVHTTP_REQ_POST | EVHTTP_REQ_PUT |
+                                                EVHTTP_REQ_DELETE);
 
     for (size_t i = 0; i < NUM_ROUTES; ++i) {
         evhttp_set_cb(http_server, ROUTES_CONFIG[i].path, auth_middleware, (void *)(intptr_t)i);
@@ -228,7 +213,7 @@ int main() {
 
     syslog(LOG_INFO, "Server stopping");
     closelog();
-    run_cmd_argv_teardown(); // ADDED: clean up the SIGCHLD event before arena teardown
+    run_cmd_argv_teardown();
     teardown_arena();
     evhttp_free(http_server);
     event_free(sig_int);
