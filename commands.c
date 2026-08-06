@@ -1,19 +1,69 @@
 #include "commands.h"
 #include "arena.h"
 #include "utils.h"
+#include <errno.h>
+#include <event2/event.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #define SERVER_BINARY "target"
 
-char *run_cmd_argv(const char *path, char *const argv[], int *exit_code_out) {
-    struct timeval start, end;
-    gettimeofday(&start, NULL);
+/* ── libevent integration ─────────────────────────────────────────────────── */
 
+static struct event_base *g_base = NULL;
+static struct event *g_sigchld_ev = NULL;
+
+/* Reap all finished children without blocking. */
+static void sigchld_cb(evutil_socket_t sig, short events, void *arg) {
+    (void)sig;
+    (void)events;
+    (void)arg;
+    int status;
+    while (waitpid(-1, &status, WNOHANG) > 0)
+        ;
+}
+
+void commands_set_event_base(struct event_base *base) {
+    g_base = base;
+    g_sigchld_ev = evsignal_new(base, SIGCHLD, sigchld_cb, NULL);
+    if (g_sigchld_ev) {
+        event_add(g_sigchld_ev, NULL);
+    } else {
+        log_error("evsignal_new(SIGCHLD) failed; children may become zombies");
+    }
+}
+
+/* ── Async pipe drain ─────────────────────────────────────────────────────── */
+
+typedef struct {
+    struct event *ev;
+    int fd;
+} pipe_ctx;
+
+/* Called by libevent when the child's stdout/stderr pipe is readable.
+ * Drains available bytes and tears down the event + fd on EOF or error. */
+static void pipe_drain_cb(evutil_socket_t fd, short what, void *arg) {
+    (void)what;
+    pipe_ctx *ctx = (pipe_ctx *)arg;
+    char buf[512];
+    ssize_t n;
+    while ((n = read(fd, buf, sizeof(buf))) > 0)
+        ;
+    if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+        event_del(ctx->ev);
+        event_free(ctx->ev);
+        close(fd);
+        free(ctx);
+    }
+}
+
+/* ── Public API ───────────────────────────────────────────────────────────── */
+
+char *run_cmd_argv(const char *path, char *const argv[], int *exit_code_out) {
     *exit_code_out = -1;
 
     int pipefd[2];
@@ -31,101 +81,56 @@ char *run_cmd_argv(const char *path, char *const argv[], int *exit_code_out) {
     }
 
     if (pid == 0) {
-        // child
+        /* child: wire stdout/stderr into the pipe then exec */
         dup2(pipefd[1], STDOUT_FILENO);
         dup2(pipefd[1], STDERR_FILENO);
         close(pipefd[0]);
         close(pipefd[1]);
-
         execvp(path, argv);
         fprintf(stderr, "execvp failed: %s\n", path);
         _exit(127);
     }
 
-    // parent
+    /* parent */
     close(pipefd[1]);
 
-    // Dynamic allocation using arena
-    size_t capacity = 512;
-    size_t total = 0;
-    char *output = allocate(capacity);
-
-    if (!output) {
-        log_error("allocate failed in run_cmd_argv");
+    /* Make the read-end non-blocking so the event loop never stalls. */
+    int flags = fcntl(pipefd[0], F_GETFL, 0);
+    if (flags == -1 || fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK) == -1) {
+        log_error("fcntl O_NONBLOCK failed on pipe read-end");
         close(pipefd[0]);
-        waitpid(pid, NULL, 0);
         return NULL;
     }
 
-    char temp_buf[512];
-    ssize_t n;
-    while ((n = read(pipefd[0], temp_buf, sizeof(temp_buf))) > 0) {
-        if (total + n >= capacity) {
-            // Grow buffer
-            size_t new_capacity = capacity * 2;
-            // Cap at some reasonable limit if needed, e.g. 1MB?
-            // The user said "shouldnt really bother us to have super large size"
-
-            char *new_output = allocate(new_capacity);
-            if (!new_output) {
-                log_error("allocate failed during growth");
-                break; // Stop reading, return what we have
+    if (g_base) {
+        /* Register a persistent read event to drain the pipe asynchronously. */
+        pipe_ctx *ctx = malloc(sizeof(pipe_ctx));
+        if (ctx) {
+            ctx->fd = pipefd[0];
+            ctx->ev = event_new(g_base, pipefd[0], EV_READ | EV_PERSIST, pipe_drain_cb, ctx);
+            if (ctx->ev) {
+                event_add(ctx->ev, NULL);
+            } else {
+                free(ctx);
+                close(pipefd[0]);
             }
-
-            memcpy(new_output, output, total);
-            deallocate(output);
-            output = new_output;
-            capacity = new_capacity;
-        }
-
-        memcpy(output + total, temp_buf, n);
-        total += n;
-    }
-
-    // Ensure null termination (might need 1 more byte if full)
-    if (total == capacity) {
-        // This is a rare edge case where we filled exactly.
-        // We need 1 byte for 0. Allocating just 1 byte more essentially means
-        // growing substantially in arena terms (min chunk), but we must do it.
-        // Or we can just grow by small amount.
-        size_t new_capacity = capacity + 512; // Grow by one chunk
-        char *new_output = allocate(new_capacity);
-        if (new_output) {
-            memcpy(new_output, output, total);
-            deallocate(output);
-            output = new_output;
-            // capacity = new_capacity;
         } else {
-            // If fails, we truncate the last byte to fit null?
-            // Or strict fail? Truncating is safer for stability.
-            total--;
+            close(pipefd[0]);
         }
-    }
-    output[total] = '\0';
-    close(pipefd[0]);
-
-    int status;
-    waitpid(pid, &status, 0);
-
-    gettimeofday(&end, NULL);
-    double duration = (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) / 1000000.0;
-
-    int exit_code = 0;
-    if (WIFEXITED(status)) {
-        exit_code = WEXITSTATUS(status);
     } else {
-        exit_code = -1;
+        /* No event base available: close the fd; child exits on SIGPIPE. */
+        close(pipefd[0]);
     }
 
-    log_exec(path, exit_code, duration);
-    *exit_code_out = exit_code;
-
-    if (exit_code == 127) {
-        deallocate(output);
+    /* Return immediately — the job is now running in the background. */
+    char *result = allocate(1);
+    if (!result) {
+        log_error("allocate failed in run_cmd_argv");
         return NULL;
     }
-
-    return output;
+    result[0] = '\0';
+    *exit_code_out = 0;
+    return result;
 }
 
 char *run_health(int *exit_code) {

@@ -185,6 +185,7 @@ int main() {
         fprintf(stderr, "Error: Event base is null\n");
         return 1;
     }
+    commands_set_event_base(base);
 
     struct evhttp *http_server = evhttp_new(base);
     if (!http_server) {
